@@ -1,4 +1,4 @@
-# AWS Deployment for Alfresco with Search Enterprise 3 (Elasticsearch) using OpenSearch
+# AWS Deployment for Alfresco with Search Enterprise 3 using OpenSearch
 
 Local Deployment of ACS Stack using an OpenSearch AWS managed service for Alfresco Search Enterprise 3
 
@@ -8,74 +8,90 @@ Docker Compose template includes following files:
 
 ```
 .
-├── .env
+├── .env-RemovePostFix
 ├── docker-compose.yml
-└── keystores
-    ├── certificates
-    │   ├── *.eu-west-1.es.amazonaws.com.cer
-    │   ├── Amazon Root CA 1.cer
-    │   ├── Amazon.cer
-    │   └── eu-west-1-truststore.jceks
-    └── eu-west-1-truststore.jceks
+├── alfresco
+│   └── Dockerfile
+├── keystores
+├── license
+├── scripts
+└── cfn-aws_resources_for_alfresco_opensearch.yml
 ```
 
-* `.env` includes common values and service versions to be used by Docker Compose, you may need to review this values according to your environment
-* `docker-compose.yml` is a regular ACS Docker Compose, including Elasticsearch Connector and the endpoint provided by OpenSearch service in AWS
-* `keystores` folder includes a truststore for clients communicating with Elasticsearch (Alfresco Repository and Elasticsearch Connector)
-* `keystores/certificates` folder includes `eu-west-1` Amazon certificates, so you can build keystore file by your own. If you're using `eu-west-1` zone to deploy OpenSearch in AWS, you can use default `eu-west-1-truststore.jceks`
+* `.env-RemovePostFix` includes common values and service versions to be used by Docker Compose. A sample is provided (.env-RemovePostFix), save it as `.env` after values for your environment has been provided.
+* `docker-compose.yml` is a regular ACS Docker Compose, including Elasticsearch Connector and the endpoints provided by OpenSearch Service, RDS and MQ in AWS.
+* `Dockerfile` has the build instructions to customize default Alfresco Repository Docker Image.
+* `keystores` folder is empty by default, copy your `truststore.pkcs12` file produced with `scripts/build-truststore.sh` tool
+* `license` folder is empty be default, copy your `alfresco.lic` file in this folder
+* `scripts` folder includes a set of bash scripts to configure the Alfresco EC2 Instance
+* `cfn-aws_resources_for_alfresco_opensearch.yml` Cloudformation template to deploy AWS resources to run this Alfresco system.
 
 
-## Creating an OpenSearch service in AWS
+## Deploy AWS resources with Cloudformation
 
-Before starting Docker Compose deployment, OpenSearch service must be available in AWS.
+After deploying the AWS resources with the provided [Cloudformation template](./cfn-aws_resources_for_alfresco_opensearch.yml), retrieve values for your AWS environment on the Cloudformation stack's output tab.
 
-[Amazon OpenSearch Service](https://docs.aws.amazon.com/opensearch-service/latest/developerguide/gsg.html) can be deployed using the AWS Web Console. Following settings are recommended to be used with this ACS Docker Compose for testing purposes.
 
-| Property                           | Value                                |
-|------------------------------------|--------------------------------------|
-| Name                               | acs-elasticsearch                    |
-| Deployment type                    | Development and testing              |
-| Version                            | 1.3                                  |
-| Auto-Tune                          | Disable                              |
-| Availability Zones                 | 1-AZ                                 |
-| Instance type                      | r6g.large.search                     |
-| Number of nodes                    | 1                                    |
-| Storage type                       | EBS                                  |
-| EBS volume type                    | General purpose (SSD)                |
-| EBS storage size per node          | 20                                   |
-| Network                            | Public access                        |
-| Enable fine-grained access control | True                                 |
-| Create master user                 | True                                 |
-| Master username                    | <OPENSEARCH_MASTER_USERNAME>                           |
-| Master password                    | <OPENSEARCH_MASTER_PASSWORD>                           |
-| Domain access policy               | Only use fine-grained access control |
+## Preparing the Alfresco EC2 Instance
 
-Once the Domain is available, the hostname (for instance `search-acs-elasticsearch-qpmpsomtkszxgrrryehiwxkhfm.eu-west-1.es.amazonaws.com`) will be available using HTTPs in port 443 and you should be able to connect using a browser with Master credentials.
-
-Add the values for your environment in Docker Compose `.env` file
+Before deploying Docker Compose templates, follow this steps to configure the EC2 Instance using the scripts available in `scripts` folder.
 
 ```
-ELASTICSEARCH_SERVER_NAME=<OPENSEARCH_SERVER_NAME>
-ELASTICSEARCH_USER=<OPENSEARCH_MASTER_USERNAME>
-ELASTICSEARCH_PASS=<OPENSEARCH_MASTER_PASSWORD>
+cd scripts
 ```
 
-If you are deploying AWS OpenSearch in `eu-west-1` region, no additional steps are required.
-
-
-## Creating truststore file for a different Amazon region
-
-If you are deploying AWS OpenSearch in a region different from `eu-west-1`, building the `eu-west-1-truststore.jceks` truststore file is required.
-
-Following sample, available in `keystores\certificates` folder, builds the truststore for `eu-west-1` region.
+**Install Docker and Docker Compose**
 
 ```
-$ keytool -import -file Amazon.cer -alias Amazon -keystore eu-west-1-truststore.jceks
-$ keytool -import -file Amazon\ Root\ CA\ 1.cer -alias AmazonRootCA1 -keystore eu-west-1-truststore.jceks
-$ keytool -import -file \*.eu-west-1.es.amazonaws.com.cer -alias eu-west-1 -keystore eu-west-1-truststore.jceks
+./1-install-docker.sh
 ```
 
->> Note that default password `password` has been used for this sample
+After this step, reboot the instance (use `sudo shutdown -r now` command). If the instance is powered off and then restarted (rather than rebooted), it is likely that the public ipv_4 address will change. 
+
+**Login quay.io**
+
+```
+./2-login-quay.sh
+```
+
+Credentials required to download Alfresco Docker Images from quay.io. Contact Alfresco Support to get them.
+
+
+## Configure Docker Compose `.env` file with environmental values.
+Use the values from your Cloudformation stack's output tab for for your environmental values
+
+**Create Database**
+
+```
+./3-create-database <DatabaseEndPoint>
+```
+
+`<DatabaseEndPoint>` is the DB DNS Name created using the Cloud Formation Template, for instance `acs-opensearch-opensearchalfresco.cijbca5yttz2.eu-west-1.rds.amazonaws.com`
+
+
+**Mount Filesystem**
+
+```
+./4-mount-efs.sh <FileSystemMount>
+```
+
+`<FileSystemMount>` is the EFS DNS Name created using the Cloud Formation Template, for instance `fs-06919b0d9d232efe3.efs.eu-west-1.amazonaws.com`
+
+
+**Create TrustStore from OpenSearch**
+
+```
+./5-build-truststore.sh <OpenSearchDomainEndpoint>
+```
+
+`<OpenSearchDomainEndpoint>` is the OpenSearch DNS Name created using the Cloud Formation Template, for instance `vpc-acs-opensearch-kwu4eqb2qmj745h7fdcoa5jp5e.eu-west-1.es.amazonaws.com`
+
+Once this script has been executed successfully, copy the produced `truststore/truststore.pkcs12` file to `keystores` folder
+
+**Adding Alfresco License**
+
+Copy your `alfresco.lic` file to `license` folder. Contact Alfresco Support to get a valid license file for ACS 7.2.
+
 
 ## Using
 
@@ -85,13 +101,13 @@ $ docker-compose up --build --force-recreate
 
 ## Service URLs
 
-http://localhost:8080/workspace
+http://*ipv4OfAlfrescoServer*:8080/workspace
 
 ADW
 * user: admin
 * password: admin
 
-http://localhost:8080/alfresco
+http://*ipv4OfAlfrescoServer*:8080/alfresco
 
 Alfresco Repository
 * user: admin
